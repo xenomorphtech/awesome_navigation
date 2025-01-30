@@ -1,17 +1,22 @@
-rust navigation implementations
-https://github.com/ohchase/divert.git
+# Rust Navigation Implementations
 
-https://github.com/edwin0cheng/recast-detour.git
+## Libraries and Bindings
 
-https://github.com/andriyDev/recastnavigation-rs-sys
-These are the raw FFI bindings for all libraries in recastnavigation. Each library is enabled by a feature flag with the corresponding name:
-recast -> Recast
-detour -> Detour
-detour_crowd -> DetourCrowd
-detour_tile_cache -> DetourTileCache
+### [divert](https://github.com/ohchase/divert.git)
+Navigation implementation in Rust.
 
-https://github.com/andriyDev/recast-rs.git
+### [recast-detour](https://github.com/edwin0cheng/recast-detour.git)
+Rust implementation of the Recast/Detour navigation system.
 
-https://github.com/Robzz/recast-rs
-Rust bindings to the Recast/Detour libraries
+### [recastnavigation-rs-sys](https://github.com/andriyDev/recastnavigation-rs-sys)
+Raw FFI bindings for all libraries in recastnavigation. Each library is enabled by a feature flag:
+- `recast` - Enables Recast
+- `detour` - Enables Detour
+- `detour_crowd` - Enables DetourCrowd
+- `detour_tile_cache` - Enables DetourTileCache
 
+### [recast-rs](https://github.com/andriyDev/recast-rs.git)
+Rust implementation of Recast navigation.
+
+### [recast-rs (Robzz)](https://github.com/Robzz/recast-rs)
+Rust bindings to the Recast/Detour libraries.
