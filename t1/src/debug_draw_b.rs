@@ -1,6 +1,6 @@
+use egui::Vec2;
 use glam::{Vec3, Vec4};
 use std::f32::consts::PI;
-use egui::Vec2;
 
 // Input mesh data structure
 pub struct InputMesh {
@@ -24,7 +24,7 @@ pub fn du_debug_draw_tri_mesh_slope(
     dd: &mut impl DebugDraw,
     mesh: &InputMesh,
     walkable_slope_angle: f32,
-    tex_scale: f32
+    tex_scale: f32,
 ) {
     if mesh.verts.is_empty() || mesh.tris.is_empty() || mesh.normals.is_empty() {
         return;
@@ -34,26 +34,21 @@ pub fn du_debug_draw_tri_mesh_slope(
     let walkable_thr = (walkable_slope_angle / 180.0 * PI).cos();
 
     dd.texture(true);
-    
+
     dd.begin(DU_DRAW_TRIS, 1.0);
-    
+
     let unwalkable = Vec4::new(0.75, 0.5, 0.0, 1.0); // Similar to duRGBA(192,128,0,255)
-    
+
     // Process triangles
     for i in (0..mesh.tris.len()).step_by(3) {
         let norm = &mesh.normals[i];
-        
+
         // Calculate color based on slope
         let a = ((2.0 + norm.x + norm.y) / 4.0 * 220.0) as u8;
-        let base_col = Vec4::new(
-            a as f32 / 255.0,
-            a as f32 / 255.0,
-            a as f32 / 255.0,
-            1.0
-        );
-        
+        let base_col = Vec4::new(a as f32 / 255.0, a as f32 / 255.0, a as f32 / 255.0, 1.0);
+
         let color = if norm.y < walkable_thr {
-            lerp_col(base_col, unwalkable, 64.0/255.0)
+            lerp_col(base_col, unwalkable, 64.0 / 255.0)
         } else {
             base_col
         };
@@ -66,14 +61,14 @@ pub fn du_debug_draw_tri_mesh_slope(
         // Calculate texture coordinates
         let mut ax = 0;
         let mut ay = 0;
-        
+
         if norm.y.abs() > norm[ax].abs() {
             ax = 1;
         }
         if norm.z.abs() > norm[ax].abs() {
             ax = 2;
         }
-        
+
         ax = (1 << ax) & 3; // +1 mod 3
         ay = (1 << ax) & 3; // +1 mod 3
 
@@ -85,7 +80,7 @@ pub fn du_debug_draw_tri_mesh_slope(
         dd.vertex_uv(*vb, color, uvb);
         dd.vertex_uv(*vc, color, uvc);
     }
-    
+
     dd.end();
     dd.texture(false);
 }

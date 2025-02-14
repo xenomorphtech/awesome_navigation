@@ -21,7 +21,7 @@ impl EguiDebugDraw {
         Self {
             lines: Vec::new(),
             points: Vec::new(),
-            tris: Vec::new(),  
+            tris: Vec::new(),
             current_mode: 0,
             texture_enabled: false,
             vertex_count: 0,
@@ -60,8 +60,14 @@ impl DebugDraw for EguiDebugDraw {
             } else {
                 let tri = self.tris.last_mut().unwrap();
                 match self.vertex_count % 3 {
-                    1 => { tri.1 = pos; tri.5 = uv; },
-                    2 => { tri.2 = pos; tri.6 = uv; },
+                    1 => {
+                        tri.1 = pos;
+                        tri.5 = uv;
+                    }
+                    2 => {
+                        tri.2 = pos;
+                        tri.6 = uv;
+                    }
                     _ => {}
                 }
             }
@@ -87,8 +93,8 @@ struct Camera {
 impl Camera {
     fn new() -> Self {
         Self {
-            position: Vec3::new(0.0, 2.0, 5.0), // Start a bit above ground
-            yaw: -90.0_f32.to_radians(),        // Look along -Z initially
+            position: Vec3::new(0.0, 2.0, 5.0),
+            yaw: -90.0_f32.to_radians(),
             pitch: 0.0,
             fov: 60.0_f32.to_radians(),
             aspect: 1.0,
@@ -96,24 +102,54 @@ impl Camera {
     }
 
     fn view_matrix(&self) -> Mat4 {
-        // Calculate forward vector
         let forward = Vec3::new(
             self.yaw.cos() * self.pitch.cos(),
             self.pitch.sin(),
             self.yaw.sin() * self.pitch.cos(),
-        ).normalize();
-
-        // Calculate right vector
+        )
+        .normalize();
         let right = forward.cross(Vec3::Y).normalize();
-        
-        // Calculate up vector
         let up = right.cross(forward);
 
-        Mat4::look_to_rh(self.position, forward, up)
+        // Create view matrix that properly handles w coordinate
+        let mut view = Mat4::IDENTITY;
+
+        // Set rotation part
+        view.col_mut(0)[0] = right.x;
+        view.col_mut(0)[1] = right.y;
+        view.col_mut(0)[2] = right.z;
+
+        view.col_mut(1)[0] = up.x;
+        view.col_mut(1)[1] = up.y;
+        view.col_mut(1)[2] = up.z;
+
+        view.col_mut(2)[0] = -forward.x;
+        view.col_mut(2)[1] = -forward.y;
+        view.col_mut(2)[2] = -forward.z;
+
+        // Set translation part
+        view.col_mut(3)[0] = -right.dot(self.position);
+        view.col_mut(3)[1] = -up.dot(self.position);
+        view.col_mut(3)[2] = forward.dot(self.position);
+        view.col_mut(3)[3] = 1.0;
+
+        view
     }
 
     fn projection_matrix(&self) -> Mat4 {
-        Mat4::perspective_rh(self.fov, self.aspect, 0.1, 100.0)
+        let f = 1.0 / (self.fov / 2.0).tan();
+        let near = 0.1;
+        let far = 100.0;
+
+        // Create perspective projection matrix with proper w coordinate handling
+        let mut proj = Mat4::ZERO;
+        proj.col_mut(0)[0] = f / self.aspect;
+        proj.col_mut(1)[1] = f;
+        proj.col_mut(2)[2] = -(far + near) / (far - near);
+        proj.col_mut(2)[3] = -1.0;
+        proj.col_mut(3)[2] = -(2.0 * far * near) / (far - near);
+
+        proj
     }
 
     fn update(&mut self, ui: &egui::Ui) {
@@ -121,24 +157,17 @@ impl Camera {
         let move_speed = 5.0 * delta_time;
         let rotate_speed = 1.0 * delta_time;
 
-        // Mouse look when right button is held
         if ui.input(|i| i.pointer.secondary_down()) {
             let delta = ui.input(|i| i.pointer.delta());
             self.yaw += delta.x * 0.005;
-            self.pitch = (self.pitch - delta.y * 0.005)
-                .clamp(-89.0_f32.to_radians(), 89.0_f32.to_radians());
+            self.pitch =
+                (self.pitch - delta.y * 0.005).clamp(-89.0_f32.to_radians(), 89.0_f32.to_radians());
         }
 
-        // Get forward and right vectors for movement
-        let forward = Vec3::new(
-            self.yaw.cos(),
-            0.0,
-            self.yaw.sin(),
-        ).normalize();
-        
+        let forward = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()).normalize();
+
         let right = forward.cross(Vec3::Y).normalize();
 
-        // WASD movement
         ui.input(|i| {
             if i.key_down(egui::Key::W) {
                 self.position += forward * move_speed;
@@ -152,7 +181,6 @@ impl Camera {
             if i.key_down(egui::Key::D) {
                 self.position += right * move_speed;
             }
-            // Up/Down movement
             if i.key_down(egui::Key::E) {
                 self.position.y += move_speed;
             }
@@ -173,18 +201,25 @@ pub struct MeshViewerApp {
 
 fn obj_to_input_mesh(obj: &ObjData) -> InputMesh {
     let mut mesh = InputMesh::new();
-    
+
     // Convert vertices
-    mesh.verts = obj.vertices.iter().skip(1).map(|v| {
-        Vec3::new(v.x, v.y, v.z)
-    }).collect();
+    mesh.verts = obj
+        .vertices
+        .iter()
+        .skip(1)
+        .map(|v| Vec3::new(v.x, v.y, v.z))
+        .collect();
 
     // Triangulate faces and add indices
     let triangles = obj.triangulate();
-    mesh.tris = triangles.iter().flat_map(|tri| {
-        // Adjust indices to be 0-based
-        vec![tri[0] - 1, tri[1] - 1, tri[2] - 1].into_iter()
-    }).map(|i| i as i32).collect();
+    mesh.tris = triangles
+        .iter()
+        .flat_map(|tri| {
+            // Adjust indices to be 0-based
+            vec![tri[0] - 1, tri[1] - 1, tri[2] - 1].into_iter()
+        })
+        .map(|i| i as i32)
+        .collect();
 
     // Calculate normals for each vertex in each triangle
     mesh.normals = Vec::new();
@@ -210,9 +245,9 @@ impl MeshViewerApp {
         let mut default_mesh = InputMesh::new();
         default_mesh.verts = vec![
             Vec3::new(-1.0, 0.0, -1.0),
-            Vec3::new( 1.0, 0.0, -1.0),
-            Vec3::new( 1.0, 1.0,  1.0),
-            Vec3::new(-1.0, 1.0,  1.0),
+            Vec3::new(1.0, 0.0, -1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(-1.0, 1.0, 1.0),
         ];
         default_mesh.tris = vec![0, 1, 2, 0, 2, 3];
         let normal1 = (default_mesh.verts[1] - default_mesh.verts[0])
@@ -271,7 +306,7 @@ impl MeshViewerApp {
                 (min.y + max.y) * 0.5,
                 (min.z + max.z) * 0.5,
             );
-            
+
             // Position camera at a good starting point relative to the model
             self.camera.position = center + Vec3::new(0.0, 2.0, 5.0);
             self.camera.yaw = -90.0_f32.to_radians();
@@ -285,24 +320,43 @@ impl MeshViewerApp {
             &mut self.debug_draw,
             &self.mesh,
             self.walkable_slope_angle,
-            1.0
+            1.0,
         );
     }
 }
 
-fn pos_to_screen(pos: Vec3, camera: &Camera, rect: egui::Rect) -> Pos2 {
+fn pos_to_screen(pos: Vec3, camera: &Camera, rect: egui::Rect) -> Option<Pos2> {
     let view_proj = camera.projection_matrix() * camera.view_matrix();
+    // Convert Vec3 to Vec4 for clip space
     let clip_pos = view_proj.project_point3(pos);
-    
-    // Check if point is behind camera
-    if clip_pos.z > 1.0 {
-        return Pos2::new(-1000.0, -1000.0); // Off-screen
+    let clip_pos = Vec4::new(clip_pos.x, clip_pos.y, clip_pos.z, 1.0);
+
+    // Handle near plane clipping - if point is behind or very close to camera
+    if clip_pos.z <= 0.001 {
+        return None;
     }
 
-    Pos2::new(
-        (clip_pos.x * 0.5 + 0.5) * rect.width() + rect.min.x,
-        (1.0 - (clip_pos.y * 0.5 + 0.5)) * rect.height() + rect.min.y,
-    )
+    // Perspective divide
+    let w = clip_pos.w;
+    let ndc = Vec3::new(clip_pos.x / w, clip_pos.y / w, clip_pos.z / w);
+
+    // More lenient frustum culling - allow points slightly outside the frustum
+    // This helps prevent lines from disappearing near screen edges
+    const MARGIN: f32 = 0.2; // 20% margin
+    if ndc.x < -1.0 - MARGIN
+        || ndc.x > 1.0 + MARGIN
+        || ndc.y < -1.0 - MARGIN
+        || ndc.y > 1.0 + MARGIN
+        || ndc.z > 1.0 + MARGIN
+    {
+        return None;
+    }
+
+    // Clamp coordinates to screen bounds
+    let x = (ndc.x * 0.5 + 0.5).clamp(0.0, 1.0) * rect.width() + rect.min.x;
+    let y = (1.0 - (ndc.y * 0.5 + 0.5)).clamp(0.0, 1.0) * rect.height() + rect.min.y;
+
+    Some(Pos2::new(x, y))
 }
 
 impl eframe::App for MeshViewerApp {
@@ -313,7 +367,7 @@ impl eframe::App for MeshViewerApp {
                 if ui.button("Load OBJ").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("OBJ files", &["obj"])
-                        .pick_file() 
+                        .pick_file()
                     {
                         self.load_obj(path);
                     }
@@ -344,24 +398,29 @@ impl eframe::App for MeshViewerApp {
 
             let painter = ui.painter();
 
-            // Draw all triangles
+            // Draw all triangle
             for tri in &self.debug_draw.tris {
                 let points = vec![
                     pos_to_screen(tri.0, &self.camera, rect),
                     pos_to_screen(tri.1, &self.camera, rect),
                     pos_to_screen(tri.2, &self.camera, rect),
                 ];
-                
-                // Only draw if all points are on screen
-                if !points.iter().any(|p| p.x == -1000.0 && p.y == -1000.0) {
+            
+                // Convert Vec<Option<Pos2>> to Vec<Pos2> by filtering out None values
+                let valid_points: Vec<Pos2> = points.into_iter()
+                    .filter_map(|p| p)  // Removes None values and unwraps Some values
+                    .collect();
+            
+                // Only draw if we have all three points (no points were culled)
+                if valid_points.len() == 3 {
                     painter.add(egui::Shape::convex_polygon(
-                        points,
-                        tri.3,
-                        (1.0, tri.3),
+                        valid_points,
+                        tri.3,  // Fill color
+                        (1.0, tri.3),  // Stroke width and color
                     ));
                 }
             }
-            
+
             // Add control instructions
             ui.painter().text(
                 rect.min + egui::vec2(10.0, 10.0),
@@ -389,19 +448,19 @@ pub fn run() -> Result<(), eframe::Error> {
 // Create a minimal test mesh that should trigger the rendering artifacts
 fn create_test_mesh() -> InputMesh {
     let mut mesh = InputMesh::new();
-    
+
     // Create just two triangles that share an edge
     mesh.verts = vec![
-        Vec3::new(0.0, 0.0, 0.0),    // Bottom vertex
-        Vec3::new(-1.0, 2.0, 0.0),   // Top left
-        Vec3::new(1.0, 2.0, 0.0),    // Top right
-        Vec3::new(0.0, 1.0, 1.0),    // Back middle
+        Vec3::new(0.0, 0.0, 0.0),  // Bottom vertex
+        Vec3::new(-1.0, 2.0, 0.0), // Top left
+        Vec3::new(1.0, 2.0, 0.0),  // Top right
+        Vec3::new(0.0, 1.0, 1.0),  // Back middle
     ];
 
     // Create two triangles
     mesh.tris = vec![
-        0, 1, 2,  // Front triangle
-        0, 2, 3   // Back triangle with steep slope
+        0, 1, 2, // Front triangle
+        0, 2, 3, // Back triangle with steep slope
     ];
 
     // Calculate normals
@@ -415,8 +474,8 @@ fn create_test_mesh() -> InputMesh {
     let normal2 = (v2 - v0).cross(v3 - v0).normalize();
 
     mesh.normals = vec![
-        normal1, normal1, normal1,  // First triangle
-        normal2, normal2, normal2   // Second triangle
+        normal1, normal1, normal1, // First triangle
+        normal2, normal2, normal2, // Second triangle
     ];
 
     mesh
