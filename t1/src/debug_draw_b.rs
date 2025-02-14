@@ -1,5 +1,6 @@
 use glam::{Vec3, Vec4};
 use std::f32::consts::PI;
+use egui::Vec2;
 
 // Input mesh data structure
 pub struct InputMesh {

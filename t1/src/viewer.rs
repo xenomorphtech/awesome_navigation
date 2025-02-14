@@ -1,17 +1,20 @@
 use eframe::egui::{self, Color32, ViewportBuilder};
-use egui::Pos2;
+use egui::{Pos2, Vec2};
 use egui_gizmo::GizmoMode;
 use glam::{Mat4, Vec3, Vec4};
+use std::path::PathBuf;
 
-// Import the debug draw implementation from previous code
-use crate::debug_draw::*;
-use crate::debug_draw::{du_debug_draw_poly_mesh, DebugDraw, PolyMesh};
+// Import the debug draw implementation and obj loader
+use crate::debug_draw_b::*;
+use crate::obj_loader::{self, ObjData};
 
 struct EguiDebugDraw {
     lines: Vec<(Vec3, Vec3, Color32)>,
     points: Vec<(Vec3, Color32)>,
-    quads: Vec<(Vec3, Vec3, Vec3, Vec3, Color32)>,
+    tris: Vec<(Vec3, Vec3, Vec3, Color32, Vec2, Vec2, Vec2)>,
     current_mode: i32,
+    texture_enabled: bool,
+    vertex_count: usize,
 }
 
 impl EguiDebugDraw {
@@ -19,24 +22,32 @@ impl EguiDebugDraw {
         Self {
             lines: Vec::new(),
             points: Vec::new(),
-            quads: Vec::new(),
+            tris: Vec::new(),  
             current_mode: 0,
+            texture_enabled: false,
+            vertex_count: 0,
         }
     }
 
     fn clear(&mut self) {
         self.lines.clear();
         self.points.clear();
-        self.quads.clear();
+        self.tris.clear();
+        self.vertex_count = 0;
     }
 }
 
 impl DebugDraw for EguiDebugDraw {
     fn begin(&mut self, prim: i32, _size: f32) {
         self.current_mode = prim;
+        self.vertex_count = 0;
     }
 
     fn vertex(&mut self, pos: Vec3, color: Vec4) {
+        self.vertex_uv(pos, color, Vec2::new(0.0, 0.0));
+    }
+
+    fn vertex_uv(&mut self, pos: Vec3, color: Vec4, uv: Vec2) {
         let col = Color32::from_rgba_premultiplied(
             (color.x * 255.0) as u8,
             (color.y * 255.0) as u8,
@@ -44,52 +55,34 @@ impl DebugDraw for EguiDebugDraw {
             (color.w * 255.0) as u8,
         );
 
-        match self.current_mode {
-            DU_DRAW_LINES => {
-                if self.lines.len() % 2 == 1 {
-                    let last = self.lines.last_mut().unwrap();
-                    last.1 = pos;
-                } else {
-                    self.lines.push((pos, pos, col));
+        if self.current_mode == DU_DRAW_TRIS {
+            if self.vertex_count % 3 == 0 {
+                self.tris.push((pos, pos, pos, col, uv, uv, uv));
+            } else {
+                let tri = self.tris.last_mut().unwrap();
+                match self.vertex_count % 3 {
+                    1 => { tri.1 = pos; tri.5 = uv; },
+                    2 => { tri.2 = pos; tri.6 = uv; },
+                    _ => {}
                 }
             }
-            DU_DRAW_POINTS => {
-                self.points.push((pos, col));
-            }
-            DU_DRAW_QUADS => {
-                if self.quads.len() == 0 || self.quads.last().unwrap().4 != col {
-                    self.quads.push((pos, pos, pos, pos, col));
-                } else {
-                    let quad = self.quads.last_mut().unwrap();
-                    match self.points.len() % 4 {
-                        0 => quad.0 = pos,
-                        1 => quad.1 = pos,
-                        2 => quad.2 = pos,
-                        3 => quad.3 = pos,
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
+            self.vertex_count += 1;
         }
+    }
+
+    fn texture(&mut self, state: bool) {
+        self.texture_enabled = state;
     }
 
     fn end(&mut self) {}
-
-    fn area_to_col(&self, area: u8) -> Vec4 {
-        // Simple area coloring - you can customize this
-        match area {
-            0 => Vec4::new(0.0, 0.0, 0.0, 0.25),
-            63 => Vec4::new(0.0, 0.75, 1.0, 0.25),
-            _ => Vec4::new((area as f32) / 255.0, 0.5, (255 - area) as f32 / 255.0, 0.5),
-        }
-    }
 }
 
 pub struct MeshViewerApp {
-    mesh: PolyMesh,
+    mesh: InputMesh,
     debug_draw: EguiDebugDraw,
     camera: Camera,
+    walkable_slope_angle: f32,
+    obj_path: Option<PathBuf>,
 }
 
 struct Camera {
@@ -120,48 +113,106 @@ impl Camera {
     }
 }
 
+fn obj_to_input_mesh(obj: &ObjData) -> InputMesh {
+    let mut mesh = InputMesh::new();
+    
+    // Convert vertices
+    mesh.verts = obj.vertices.iter().skip(1).map(|v| {
+        Vec3::new(v.x, v.y, v.z)
+    }).collect();
+
+    // Triangulate faces and add indices
+    let triangles = obj.triangulate();
+    mesh.tris = triangles.iter().flat_map(|tri| {
+        // Adjust indices to be 0-based
+        vec![tri[0] - 1, tri[1] - 1, tri[2] - 1].into_iter()
+    }).map(|i| i as i32).collect();
+
+    // Calculate normals for each vertex in each triangle
+    mesh.normals = Vec::new();
+    for chunk in mesh.tris.chunks(3) {
+        if chunk.len() == 3 {
+            let v0 = mesh.verts[chunk[0] as usize];
+            let v1 = mesh.verts[chunk[1] as usize];
+            let v2 = mesh.verts[chunk[2] as usize];
+            let normal = (v1 - v0).cross(v2 - v0).normalize();
+            // Add the same normal for all three vertices of this triangle
+            mesh.normals.push(normal);
+            mesh.normals.push(normal);
+            mesh.normals.push(normal);
+        }
+    }
+
+    mesh
+}
+
 impl MeshViewerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Create a sample mesh
-        let mesh = PolyMesh {
-            verts: vec![
-                Vec3::new(0.0, 0.0, 0.0),
-                Vec3::new(1.0, 0.0, 0.0),
-                Vec3::new(1.0, 0.0, 1.0),
-                Vec3::new(0.0, 0.0, 1.0),
-                Vec3::new(0.5, 1.0, 0.5),
-            ],
-            polys: vec![
-                vec![0, 1, 4, RC_MESH_NULL_IDX],
-                vec![1, 2, 4, RC_MESH_NULL_IDX],
-                vec![2, 3, 4, RC_MESH_NULL_IDX],
-                vec![3, 0, 4, RC_MESH_NULL_IDX],
-            ],
-            areas: vec![
-                RC_WALKABLE_AREA,
-                RC_WALKABLE_AREA,
-                RC_NULL_AREA,
-                RC_WALKABLE_AREA,
-            ],
-            nvp: 4,
-            cs: 1.0,
-            ch: 1.0,
-            bmin: Vec3::new(-1.0, -1.0, -1.0),
-        };
+        let mut mesh = InputMesh::new();
+        
+        // Add default simple mesh if no OBJ is loaded
+        mesh.verts = vec![
+            Vec3::new(-1.0, 0.0, -1.0),
+            Vec3::new( 1.0, 0.0, -1.0),
+            Vec3::new( 1.0, 1.0,  1.0),
+            Vec3::new(-1.0, 1.0,  1.0),
+        ];
+
+        mesh.tris = vec![0, 1, 2, 0, 2, 3];
+
+        let normal1 = (mesh.verts[1] - mesh.verts[0])
+            .cross(mesh.verts[2] - mesh.verts[0])
+            .normalize();
+        let normal2 = (mesh.verts[2] - mesh.verts[0])
+            .cross(mesh.verts[3] - mesh.verts[0])
+            .normalize();
+
+        mesh.normals = vec![normal1, normal1, normal1, normal2, normal2, normal2];
 
         Self {
             mesh,
             debug_draw: EguiDebugDraw::new(),
             camera: Camera::new(),
+            walkable_slope_angle: 45.0,
+            obj_path: None,
+        }
+    }
+
+    fn load_obj(&mut self, path: PathBuf) {
+        if let Ok(obj_data) = obj_loader::load_obj(&path) {
+            self.mesh = obj_to_input_mesh(&obj_data);
+            self.obj_path = Some(path);
+
+            // Adjust camera to fit the model
+            let (min, max) = obj_data.get_bounds();
+            let center = Vec3::new(
+                (min.x + max.x) * 0.5,
+                (min.y + max.y) * 0.5,
+                (min.z + max.z) * 0.5,
+            );
+            let size = Vec3::new(
+                max.x - min.x,
+                max.y - min.y,
+                max.z - min.z,
+            );
+            let max_size = size.x.max(size.y).max(size.z);
+            
+            self.camera.target = center;
+            self.camera.position = center + Vec3::new(max_size * 2.0, max_size * 2.0, max_size * 2.0);
         }
     }
 
     fn draw_mesh(&mut self) {
         self.debug_draw.clear();
-        du_debug_draw_poly_mesh(&mut self.debug_draw, &self.mesh);
+        du_debug_draw_tri_mesh_slope(
+            &mut self.debug_draw,
+            &self.mesh,
+            self.walkable_slope_angle,
+            1.0
+        );
     }
 }
-// Convert glam Mat4 to array format expected by egui_gizmo
+
 fn mat4_to_array(mat: Mat4) -> [[f32; 4]; 4] {
     let cols = mat.to_cols_array_2d();
     [
@@ -175,29 +226,44 @@ fn mat4_to_array(mat: Mat4) -> [[f32; 4]; 4] {
 impl eframe::App for MeshViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
+            // Add file picker
+            ui.horizontal(|ui| {
+                if ui.button("Load OBJ").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("OBJ files", &["obj"])
+                        .pick_file() 
+                    {
+                        self.load_obj(path);
+                    }
+                }
+
+                if let Some(path) = &self.obj_path {
+                    ui.label(format!("Loaded: {}", path.display()));
+                }
+
+                ui.separator();
+
+                ui.label("Walkable Slope Angle:");
+                ui.add(egui::Slider::new(&mut self.walkable_slope_angle, 0.0..=90.0));
+            });
+
             let mut gizmo = egui_gizmo::Gizmo::new("camera_gizmo")
                 .view_matrix(mat4_to_array(self.camera.view_matrix()).into())
                 .projection_matrix(mat4_to_array(self.camera.projection_matrix()).into())
                 .mode(GizmoMode::Rotate);
 
-            // Draw the mesh
             self.draw_mesh();
 
-            // Draw the scene
             let (rect, _response) =
                 ui.allocate_exact_size(ui.available_size(), egui::Sense::drag());
 
-            // Update camera aspect ratio
             self.camera.aspect = rect.width() / rect.height();
 
-            // Handle camera controls
             if ui.input(|i| i.key_pressed(egui::Key::R)) {
                 self.camera = Camera::new();
             }
 
-            // Draw gizmo
             if let Some(response) = gizmo.interact(ui) {
-                // Convert mint::Quaternion to glam::Quat
                 let rotation = glam::Quat::from_xyzw(
                     response.rotation.v.x,
                     response.rotation.v.y,
@@ -206,37 +272,19 @@ impl eframe::App for MeshViewerApp {
                 );
                 self.camera.position = rotation.mul_vec3(self.camera.position);
             }
-            // Draw the debug geometry
+
             let painter = ui.painter();
 
-            // Draw quads
-            for quad in &self.debug_draw.quads {
+            for tri in &self.debug_draw.tris {
                 painter.add(egui::Shape::convex_polygon(
                     vec![
-                        pos_to_screen(quad.0, &self.camera, rect),
-                        pos_to_screen(quad.1, &self.camera, rect),
-                        pos_to_screen(quad.2, &self.camera, rect),
-                        pos_to_screen(quad.3, &self.camera, rect),
+                        pos_to_screen(tri.0, &self.camera, rect),
+                        pos_to_screen(tri.1, &self.camera, rect),
+                        pos_to_screen(tri.2, &self.camera, rect),
                     ],
-                    quad.4,
-                    (1.0, quad.4),
+                    tri.3,
+                    (1.0, tri.3),
                 ));
-            }
-
-            // Draw lines
-            for line in &self.debug_draw.lines {
-                painter.line_segment(
-                    [
-                        pos_to_screen(line.0, &self.camera, rect),
-                        pos_to_screen(line.1, &self.camera, rect),
-                    ],
-                    (1.0, line.2),
-                );
-            }
-
-            // Draw points
-            for point in &self.debug_draw.points {
-                painter.circle_filled(pos_to_screen(point.0, &self.camera, rect), 3.0, point.1);
             }
         });
     }
@@ -251,7 +299,6 @@ fn pos_to_screen(pos: Vec3, camera: &Camera, rect: egui::Rect) -> Pos2 {
     )
 }
 
-// Entry point
 pub fn run() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: ViewportBuilder::default().with_inner_size([800.0, 600.0]),
